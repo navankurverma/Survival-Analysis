@@ -1,0 +1,101 @@
+---
+title: "Customer Survival Analysis"
+author: "Navankur Verma - navankurverma@gmail.com"
+date: "08/07/2020"
+output:
+  html_document:
+    fig_caption: yes
+    theme: cerulean
+    toc: yes
+    toc_float:
+      smooth_scroll: FALSE
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Dataset:
+
+Telecom companies are very interested in when customers leave their company (this is called churn). A dataset made publicly available by IBM on customer churn from a telecom company is available in the `BDgraph` R package and are called churn. The dataset contains the length of time the customer was with the company (`Account.Length`), whether they churned (`Churn`) and a number of other covariates for 3333 customers.
+
+## Kaplan-Meier estimate
+
+```{r}
+library(BDgraph)
+library(survival)
+
+data("churn")
+str(churn)
+
+#churn column is factor with 2 levels. 
+#In R, the levels start from 1, i.e. "False" is 1 and "True" is 2.
+#To make 'Surv' object we need events in form of 0s (Survived) and 1s (Churned) 
+#So converting "True" to 1 for denoting customer churned and 0 otherwise.
+
+churn$Churn <- ifelse(churn$Churn == "True", 1, 0)
+target <- Surv(time = churn$Account.Length, event = churn$Churn)
+fit <- survfit(target~1,se=TRUE)
+plot(fit, xlab = "Time", ylab = "Survival Probability",
+     main = "Probability that Customer stays longer than the given time")
+```
+
+## Median time to Churn
+
+```{r}
+#Median time to churn: 
+print(fit)
+```
+
+Median time to churn is 201.
+
+## Cox proportional model
+
+```{r}
+library(SurvRegCensCov)
+fit1 <- coxph(Surv(Account.Length,Churn)~ .,data=churn)
+summary(fit1, conf.int=FALSE)
+```
+
+Using all the covariates to model the proportional hazard function suggests that not all of the 18 variables are statistically significant (significance level of 5%). Variables like  `Area.Code`, `Day.Mins`, `Day.Calls`, `Day.Charge`, `Eve.Mins`, `Eve.Calls`, `Eve.Charge`, `Night.Mins`, `Night.Calls`, `Night.Charge`, `Intl.Mins` & `Intl.Charge` are not at all significant.   
+Categorical variable `State` is having significance for some levels and it should be noted that except `HI` and `VA` all have positive coefficients i.e. they have a increasing effect on the hazard ratio with respect to base state category of `AK` which means chances of customer churning out reduces faster when they are from one of those positive coefficient states.   
+Covariates `Int.l.Plan` , `VMail.Plan`, `VMail.Message`, `Intl.Calls` and `CustServ.Calls` show strong significance in the model:   
+
+- `Int.l.Plan`, `VMail.Message` & `CustServ.Calls` have a positive coefficients making Hazard Ratios ($exp(\beta_{j})$) greater than 1 for each of them,  i.e. hazard function increases faster with time and chances of Survival are reduced quickly. The decrease in fastest when the `Int.l.Plan = yes` (HR=3.77) as compared to when customer does not have a International plan and slowest for a unit increase of `VMail.Message` count (HR=1.049).  
+- The `VMail.Plan` & `Intl.Calls` has negative coefficients making HR less than 1 i.e. they reduce chances of customer churning out. In other words, having a Voice Mail Plan active increases chance of customer staying for long duration of time as compared to when they don't have a Voice mail plan. And the hazard ratio is 0.09 in case of Voice Mail and 0.9 in case of International Calls, which means that hazard reduces faster when customer has Active Voice mail as compared to a unit increase of International Calls.
+
+It can be shown using the Survival Function plot that how these covariates affect chances of customer churn, by running model on data which is filtered based on covariates (filtering here based on one covariate from both the positive and negative coefficient, `Int.l.Plan` from positive set & `VMail.Plan` from negative set):
+
+```{r}
+plot(survfit(Surv(Account.Length, Churn)~1, se=FALSE, data = churn),
+     main = "Effect of International and Voice Mail Plan", 
+     xlab = "Time", ylab = "Survival Probability")
+lines(survfit(Surv(Account.Length, Churn)~1,se=FALSE, 
+              data = churn[churn$Int.l.Plan == "yes",]), col = "red")
+lines(survfit(Surv(Account.Length, Churn)~1, se=FALSE, 
+              data = churn[churn$VMail.Plan == "yes",]), col = "blue")
+legend("bottomleft", legend = c("All Customer",
+                                "Customers with International Plan",
+                                "Customers with VoiceMail Plan"), 
+       fill = c("black","red","blue"))
+
+```
+
+From the filtered data, it is clear that if customers have international plans active (red) then chances of survival reduces quickly whereas it increases if customers have Voice Mail plan active (blue). 
+
+Instead of keeping all the variables, the covariates which did not gave significant coefficients can be removed and CPH model can be built with remaining ones:  
+
+```{r}
+fit2 <- coxph(Surv(Account.Length,Churn)~ State + Int.l.Plan + VMail.Plan +
+                      VMail.Message + CustServ.Calls + Intl.Calls,
+              data=churn)
+summary(fit2, conf.int = FALSE)
+```
+
+Although the Concordance of this model reduces but it still predicts time-to-churn better than by simple random chance. As it has 12 less number of coefficients to estimate so making it a parsimonious model. 
+
+## Conclusion
+
+Based on the given data, time to churn increases if customer has higher number of international calls or has a active Voice Mail plan whereas it decreases if customer has higher number of Voice Mail messages or higher number of Customer Service Calls or has an active International Plan.   
+In general it makes sense, as for instance a customer who has higher number of voice messages is most likely to stop the service as they are not using it a lot and hence getting higher number of voice mails or a customer calling to customer service frequently would generaly mean they are not satisfied with service so they are more likely to opt out.
